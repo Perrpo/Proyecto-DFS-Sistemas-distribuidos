@@ -1,0 +1,125 @@
+version: '3.9'
+
+# ============================================================
+# MiniDFS – Docker Compose
+# Servicios: 1 NameNode + 3 DataNodes
+# Red interna: dfs-network (bridge)
+# ============================================================
+
+networks:
+  dfs-network:
+    driver: bridge
+
+volumes:
+  namenode-data:
+  datanode1-data:
+  datanode2-data:
+  datanode3-data:
+
+services:
+
+  # ── NameNode ──────────────────────────────────────────────
+  namenode:
+    build:
+      context: .
+      dockerfile: namenode/Dockerfile
+    container_name: minidfs-namenode
+    hostname: namenode
+    environment:
+      - NAMENODE_PORT=50051
+      - NAMENODE_DB_PATH=/data/namenode.db
+      - BLOCK_SIZE=67108864
+      - REPLICATION_FACTOR=3
+      - HEARTBEAT_INTERVAL=10
+      - HEARTBEAT_TIMEOUT=30
+      - BLOCK_REPORT_INTERVAL=60
+      - JWT_SECRET=${JWT_SECRET:-minidfs-dev-secret}
+      - LOG_LEVEL=INFO
+    ports:
+      - "50051:50051"
+    volumes:
+      - namenode-data:/data
+    networks:
+      - dfs-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import grpc; grpc.insecure_channel('localhost:50051')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── DataNode 1 ────────────────────────────────────────────
+  datanode1:
+    build:
+      context: .
+      dockerfile: datanode/Dockerfile
+    container_name: minidfs-datanode1
+    hostname: datanode1
+    environment:
+      - NODE_ID=dn1
+      - NAMENODE_HOST=namenode
+      - NAMENODE_PORT=50051
+      - DATANODE_HOST=datanode1
+      - DATANODE_PORT=50061
+      - DATANODE_STORAGE_PATH=/data/blocks
+      - LOG_LEVEL=INFO
+    ports:
+      - "50061:50061"
+    volumes:
+      - datanode1-data:/data/blocks
+    networks:
+      - dfs-network
+    depends_on:
+      - namenode
+    restart: unless-stopped
+
+  # ── DataNode 2 ────────────────────────────────────────────
+  datanode2:
+    build:
+      context: .
+      dockerfile: datanode/Dockerfile
+    container_name: minidfs-datanode2
+    hostname: datanode2
+    environment:
+      - NODE_ID=dn2
+      - NAMENODE_HOST=namenode
+      - NAMENODE_PORT=50051
+      - DATANODE_HOST=datanode2
+      - DATANODE_PORT=50062
+      - DATANODE_STORAGE_PATH=/data/blocks
+      - LOG_LEVEL=INFO
+    ports:
+      - "50062:50062"
+    volumes:
+      - datanode2-data:/data/blocks
+    networks:
+      - dfs-network
+    depends_on:
+      - namenode
+    restart: unless-stopped
+
+  # ── DataNode 3 ────────────────────────────────────────────
+  datanode3:
+    build:
+      context: .
+      dockerfile: datanode/Dockerfile
+    container_name: minidfs-datanode3
+    hostname: datanode3
+    environment:
+      - NODE_ID=dn3
+      - NAMENODE_HOST=namenode
+      - NAMENODE_PORT=50051
+      - DATANODE_HOST=datanode3
+      - DATANODE_PORT=50063
+      - DATANODE_STORAGE_PATH=/data/blocks
+      - LOG_LEVEL=INFO
+    ports:
+      - "50063:50063"
+    volumes:
+      - datanode3-data:/data/blocks
+    networks:
+      - dfs-network
+    depends_on:
+      - namenode
+    restart: unless-stopped

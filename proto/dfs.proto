@@ -1,0 +1,296 @@
+syntax = "proto3";
+
+package dfs;
+
+// ============================================================
+// NameNode Service – Gestión de metadatos y coordinación
+// ============================================================
+service NameNodeService {
+  // Auth
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Login(LoginRequest)       returns (LoginResponse);
+
+  // Operaciones de archivos
+  rpc PutFile(PutFileRequest)       returns (PutFileResponse);
+  rpc GetFile(GetFileRequest)       returns (GetFileResponse);
+  rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
+  rpc ListFiles(ListFilesRequest)   returns (ListFilesResponse);
+
+  // Namespace (directorios)
+  rpc MakeDir(MakeDirRequest)   returns (MakeDirResponse);
+  rpc RemoveDir(RemoveDirRequest) returns (RemoveDirResponse);
+
+  // DataNode → NameNode
+  rpc Heartbeat(HeartbeatRequest)   returns (HeartbeatResponse);
+  rpc BlockReport(BlockReportRequest) returns (BlockReportResponse);
+
+  // Confirmar bloques almacenados (cliente → NameNode tras PUT)
+  rpc ConfirmBlock(ConfirmBlockRequest) returns (ConfirmBlockResponse);
+
+  // Reportar bloque corrupto
+  rpc ReportCorruptBlock(ReportCorruptBlockRequest) returns (ReportCorruptBlockResponse);
+}
+
+// ============================================================
+// DataNode Service – Almacenamiento y transferencia de bloques
+// ============================================================
+service DataNodeService {
+  // Cliente → DataNode (streaming)
+  rpc StoreBlock(stream StoreBlockRequest) returns (StoreBlockResponse);
+
+  // DataNode → Cliente (streaming)
+  rpc RetrieveBlock(RetrieveBlockRequest) returns (stream RetrieveBlockResponse);
+
+  // DataNode → DataNode (replicación pipeline)
+  rpc ReplicateBlock(ReplicateBlockRequest) returns (ReplicateBlockResponse);
+
+  // NameNode → DataNode
+  rpc DeleteBlock(DeleteBlockRequest) returns (DeleteBlockResponse);
+}
+
+// ============================================================
+// Mensajes de Autenticación
+// ============================================================
+message RegisterRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message RegisterResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  bool   success = 1;
+  string token   = 2;
+  string message = 3;
+}
+
+// ============================================================
+// Mensajes Comunes
+// ============================================================
+message DataNodeInfo {
+  string node_id = 1;
+  string host    = 2;
+  int32  port    = 3;
+}
+
+// Asignación de un bloque para upload (incluye pipeline de replicación)
+message BlockAssignment {
+  string            block_id    = 1;
+  int32             block_index = 2;
+  int64             block_size  = 3;
+  repeated DataNodeInfo datanodes = 4;   // ordenados: primer nodo = destino inicial
+}
+
+// Ubicación de un bloque para download
+message BlockLocation {
+  string            block_id    = 1;
+  int32             block_index = 2;
+  int64             block_size  = 3;
+  string            checksum    = 4;
+  repeated DataNodeInfo datanodes = 5;   // nodos donde hay réplicas activas
+}
+
+// ============================================================
+// Mensajes de Operaciones de Archivos
+// ============================================================
+message PutFileRequest {
+  string token       = 1;
+  string filepath    = 2;
+  int64  filesize    = 3;
+  int32  block_count = 4;
+}
+
+message PutFileResponse {
+  bool                    success     = 1;
+  string                  file_id     = 2;
+  repeated BlockAssignment assignments = 3;
+  string                  message     = 4;
+}
+
+message GetFileRequest {
+  string token    = 1;
+  string filepath = 2;
+}
+
+message GetFileResponse {
+  bool                   success   = 1;
+  string                 file_id   = 2;
+  int64                  filesize  = 3;
+  repeated BlockLocation locations = 4;
+  string                 message   = 5;
+}
+
+message DeleteFileRequest {
+  string token    = 1;
+  string filepath = 2;
+}
+
+message DeleteFileResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+message FileInfo {
+  string filepath    = 1;
+  int64  filesize    = 2;
+  int32  block_count = 3;
+  string created_at  = 4;
+  string status      = 5;
+}
+
+message ListFilesRequest {
+  string token     = 1;
+  string directory = 2;
+}
+
+message ListFilesResponse {
+  bool             success     = 1;
+  repeated FileInfo files      = 2;
+  repeated string  directories = 3;
+  string           message     = 4;
+}
+
+// ============================================================
+// Mensajes de Namespace
+// ============================================================
+message MakeDirRequest {
+  string token = 1;
+  string path  = 2;
+}
+
+message MakeDirResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+message RemoveDirRequest {
+  string token = 1;
+  string path  = 2;
+}
+
+message RemoveDirResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// ============================================================
+// Mensajes de Heartbeat y BlockReport
+// ============================================================
+message HeartbeatRequest {
+  string node_id         = 1;
+  string host            = 2;
+  int32  port            = 3;
+  int64  available_space = 4;
+  int32  block_count     = 5;
+}
+
+message ReplicationTask {
+  string      block_id    = 1;
+  DataNodeInfo source      = 2;
+  DataNodeInfo destination = 3;
+}
+
+message HeartbeatResponse {
+  bool                   acknowledged      = 1;
+  repeated string        blocks_to_delete  = 2;
+  repeated ReplicationTask replication_tasks = 3;
+}
+
+message BlockInfo {
+  string block_id   = 1;
+  int64  block_size = 2;
+  string checksum   = 3;
+}
+
+message BlockReportRequest {
+  string           node_id = 1;
+  repeated BlockInfo blocks = 2;
+}
+
+message BlockReportResponse {
+  bool            acknowledged     = 1;
+  repeated string blocks_to_delete = 2;
+}
+
+// ============================================================
+// Mensajes de Confirmación y Corrupción
+// ============================================================
+message ConfirmBlockRequest {
+  string token      = 1;
+  string file_id    = 2;
+  string block_id   = 3;
+  int32  block_index = 4;
+  int64  block_size  = 5;
+  string checksum   = 6;
+  repeated string node_ids = 7;   // nodos donde quedó almacenado
+}
+
+message ConfirmBlockResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+message ReportCorruptBlockRequest {
+  string token    = 1;
+  string block_id = 2;
+  string node_id  = 3;
+}
+
+message ReportCorruptBlockResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// ============================================================
+// Mensajes de Transferencia de Bloques
+// ============================================================
+message StoreBlockRequest {
+  string            block_id    = 1;
+  bytes             data        = 2;
+  int32             chunk_index = 3;
+  string            checksum    = 4;          // SHA-256 del bloque completo (en primer chunk)
+  repeated DataNodeInfo pipeline = 5;         // nodos restantes en el pipeline
+}
+
+message StoreBlockResponse {
+  bool   success  = 1;
+  string block_id = 2;
+  string message  = 3;
+}
+
+message RetrieveBlockRequest {
+  string block_id = 1;
+}
+
+message RetrieveBlockResponse {
+  bytes data        = 1;
+  int32 chunk_index = 2;
+  bool  is_last     = 3;
+}
+
+message ReplicateBlockRequest {
+  string      block_id    = 1;
+  DataNodeInfo destination = 2;
+}
+
+message ReplicateBlockResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+message DeleteBlockRequest {
+  string block_id = 1;
+}
+
+message DeleteBlockResponse {
+  bool   success = 1;
+  string message = 2;
+}
