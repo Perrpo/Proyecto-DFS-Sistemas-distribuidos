@@ -2,14 +2,14 @@
 datanode/server.py
 Servidor gRPC del DataNode.
 Implementa DataNodeService: StoreBlock, RetrieveBlock, ReplicateBlock, DeleteBlock.
-Día 1: esqueleto operativo con DeleteBlock funcional.
-Días 2-3: StoreBlock/RetrieveBlock/ReplicateBlock completos.
+Día 2: StoreBlock/RetrieveBlock/ReplicateBlock completos con pipeline de replicación.
 """
 import grpc
 from concurrent import futures
 import logging
 import sys
 import os
+import hashlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config
@@ -26,6 +26,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger('datanode.server')
 
+CHUNK_SIZE = 1 * 1024 * 1024   # 1 MB por chunk en streaming
+
 
 class DataNodeServicer(dfs_pb2_grpc.DataNodeServiceServicer):
 
@@ -34,48 +36,157 @@ class DataNodeServicer(dfs_pb2_grpc.DataNodeServiceServicer):
         self.replication_agent  = replication_agent
 
     # ══════════════════════════════════════════════════════════════════════════
-    # StoreBlock – cliente → DataNode (client-streaming)
-    # Implementación completa en Día 2
+    # StoreBlock – cliente → DataNode (client-streaming con pipeline)
     # ══════════════════════════════════════════════════════════════════════════
     def StoreBlock(self, request_iterator, context):
         """
         Recibe un bloque por streaming desde el cliente.
-        Pipeline de replicación: reenvía al siguiente DataNode de la lista.
-        Implementación completa en Día 2.
+        Pipeline de replicación: al recibir el primer chunk reenvía al siguiente
+        DataNode de la lista (si existe), de forma transparente.
         """
-        logger.info("StoreBlock recibido (implementación completa en Día 2)")
-        # Consumir el stream para no bloquear
-        for _ in request_iterator:
-            pass
-        return dfs_pb2.StoreBlockResponse(
-            success=False,
-            message="StoreBlock: implementación completa disponible en Día 2"
-        )
+        block_id    = None
+        checksum    = None
+        pipeline    = []
+        chunks      = []
+        pipeline_stub   = None
+        pipeline_channel = None
+
+        try:
+            for chunk in request_iterator:
+                # Primer chunk: inicializar metadata y pipeline
+                if block_id is None:
+                    block_id = chunk.block_id
+                    checksum = chunk.checksum
+                    pipeline = list(chunk.pipeline)     # DataNodeInfo restantes
+                    logger.info(
+                        f"StoreBlock iniciado: block_id={block_id} "
+                        f"pipeline_restante={[n.node_id for n in pipeline]}"
+                    )
+
+                    # Abrir canal al siguiente nodo del pipeline si existe
+                    if pipeline:
+                        next_node = pipeline[0]
+                        remaining = pipeline[1:]
+                        try:
+                            pipeline_channel = grpc.insecure_channel(
+                                f"{next_node.host}:{next_node.port}",
+                                options=[
+                                    ('grpc.max_send_message_length',    256 * 1024 * 1024),
+                                    ('grpc.max_receive_message_length', 256 * 1024 * 1024),
+                                ]
+                            )
+                            pipeline_stub = dfs_pb2_grpc.DataNodeServiceStub(pipeline_channel)
+                        except Exception as e:
+                            logger.error(f"No se pudo conectar al nodo pipeline {next_node.node_id}: {e}")
+                            pipeline_stub = None
+
+                chunks.append(chunk.data)
+
+            if block_id is None:
+                return dfs_pb2.StoreBlockResponse(
+                    success=False, block_id="", message="Stream vacío"
+                )
+
+            # Ensamblar datos completos
+            full_data = b"".join(chunks)
+
+            # Verificar integridad SHA-256
+            actual_checksum = hashlib.sha256(full_data).hexdigest()
+            if checksum and actual_checksum != checksum:
+                logger.error(
+                    f"StoreBlock {block_id}: checksum mismatch "
+                    f"esperado={checksum[:12]} actual={actual_checksum[:12]}"
+                )
+                return dfs_pb2.StoreBlockResponse(
+                    success=False, block_id=block_id,
+                    message=f"Error: checksum no coincide para bloque {block_id}"
+                )
+
+            # Almacenar en disco
+            success, message = self.block_store.store_block(block_id, full_data)
+            if not success:
+                logger.error(f"StoreBlock {block_id}: fallo al guardar – {message}")
+                return dfs_pb2.StoreBlockResponse(
+                    success=False, block_id=block_id, message=message
+                )
+
+            logger.info(
+                f"StoreBlock {block_id}: {len(full_data):,} bytes almacenados localmente"
+            )
+
+            # Replicar al siguiente nodo del pipeline (asíncrono en background)
+            if pipeline and pipeline_stub is not None:
+                next_node = pipeline[0]
+                remaining = pipeline[1:]
+                self.replication_agent.enqueue_pipeline(
+                    block_id, full_data, checksum, next_node, remaining
+                )
+
+            return dfs_pb2.StoreBlockResponse(
+                success=True, block_id=block_id,
+                message=f"Bloque {block_id} almacenado correctamente"
+            )
+
+        except Exception as e:
+            logger.error(f"StoreBlock error: {e}", exc_info=True)
+            return dfs_pb2.StoreBlockResponse(
+                success=False, block_id=block_id or "",
+                message=f"Error interno: {e}"
+            )
+        finally:
+            if pipeline_channel:
+                pipeline_channel.close()
 
     # ══════════════════════════════════════════════════════════════════════════
     # RetrieveBlock – DataNode → cliente (server-streaming)
-    # Implementación completa en Día 2
     # ══════════════════════════════════════════════════════════════════════════
     def RetrieveBlock(self, request, context):
         """
-        Envía un bloque en chunks al cliente.
-        Implementación completa en Día 2.
+        Envía un bloque en chunks de 1 MB al cliente.
+        Verifica integridad SHA-256 antes de enviar.
         """
-        logger.info(f"RetrieveBlock {request.block_id} (implementación completa en Día 2)")
-        yield dfs_pb2.RetrieveBlockResponse(data=b"", chunk_index=0, is_last=True)
+        block_id = request.block_id
+        logger.info(f"RetrieveBlock: solicitado block_id={block_id}")
+
+        data, error = self.block_store.retrieve_block(block_id)
+        if data is None:
+            logger.error(f"RetrieveBlock {block_id}: no encontrado – {error}")
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(error or f"Bloque no encontrado: {block_id}")
+            return
+
+        total   = len(data)
+        offset  = 0
+        chunk_i = 0
+
+        while offset < total:
+            end   = min(offset + CHUNK_SIZE, total)
+            piece = data[offset:end]
+            is_last = (end >= total)
+
+            yield dfs_pb2.RetrieveBlockResponse(
+                data=piece,
+                chunk_index=chunk_i,
+                is_last=is_last,
+            )
+            offset  += CHUNK_SIZE
+            chunk_i += 1
+
+        logger.info(
+            f"RetrieveBlock {block_id}: enviado en {chunk_i} chunk(s) ({total:,} bytes)"
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
-    # ReplicateBlock – DataNode → DataNode
-    # Implementación completa en Día 2
+    # ReplicateBlock – NameNode → DataNode (orden de re-replicación)
     # ══════════════════════════════════════════════════════════════════════════
     def ReplicateBlock(self, request, context):
         """
-        Ordena al DataNode replicar un bloque a otro destino.
-        Implementación completa en Día 2.
+        El NameNode ordena al DataNode replicar un bloque a otro destino.
+        La replicación real se encola en el ReplicationAgent.
         """
         logger.info(
             f"ReplicateBlock {request.block_id} → "
-            f"{request.destination.node_id} (Día 2)"
+            f"{request.destination.node_id} ({request.destination.host}:{request.destination.port})"
         )
         self.replication_agent.enqueue(
             request.block_id,

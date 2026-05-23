@@ -3,6 +3,7 @@
 client/cli.py
 Interfaz de línea de comandos de MiniDFS.
 Comandos: register, login, logout, put, get, ls, rm, mkdir, rmdir
+Día 2: put y get completamente implementados.
 """
 import argparse
 import sys
@@ -12,6 +13,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import config
 
 from auth_client import AuthClient
+from block_splitter import split_file, get_block_count
+from block_assembler import assemble_blocks
+from block_transfer import upload_block, download_block
 from proto import dfs_pb2, dfs_pb2_grpc
 import grpc
 
@@ -169,20 +173,220 @@ def cmd_rm(args):
 
 
 def cmd_put(args):
-    """Subir archivo al DFS – implementación completa en Día 2."""
-    _require_auth()
-    if not os.path.isfile(args.local_path):
-        print(f"Error: archivo no encontrado: {args.local_path}")
+    """
+    Subir un archivo local al DFS.
+    Flujo:
+      1. Calcular tamaño y número de bloques
+      2. Solicitar asignación al NameNode (PutFile)
+      3. Para cada bloque: dividir, subir con pipeline de replicación, confirmar
+    """
+    token      = _require_auth()
+    local_path = args.local_path
+    remote_path = args.remote_path
+
+    if not os.path.isfile(local_path):
+        print(f"Error: archivo no encontrado: {local_path}")
         sys.exit(1)
-    print("Error: comando 'put' disponible a partir del Día 2 (Viernes 22 Mayo)")
-    sys.exit(1)
+
+    filesize    = os.path.getsize(local_path)
+    block_count = get_block_count(filesize, config.BLOCK_SIZE)
+
+    print(f"Subiendo: {local_path} ({_human_size(filesize)}, {block_count} bloque(s))")
+    print(f"  → {remote_path}")
+
+    stub, ch = _nn_stub()
+    try:
+        # Solicitar asignación de bloques al NameNode
+        put_resp = stub.PutFile(
+            dfs_pb2.PutFileRequest(
+                token=token,
+                filepath=remote_path,
+                filesize=filesize,
+                block_count=block_count,
+            ),
+            timeout=30,
+        )
+    except grpc.RpcError as e:
+        print(f"Error de conexión al NameNode: {e.details()}")
+        sys.exit(1)
+    finally:
+        ch.close()
+
+    if not put_resp.success:
+        print(f"Error: {put_resp.message}")
+        sys.exit(1)
+
+    file_id     = put_resp.file_id
+    assignments = put_resp.assignments   # lista de BlockAssignment
+
+    # Subir cada bloque
+    confirmed = 0
+    try:
+        for block_index, block_data, checksum in split_file(local_path, config.BLOCK_SIZE):
+            assignment = assignments[block_index]
+            block_id   = assignment.block_id
+            nodes      = list(assignment.datanodes)  # pipeline: nodo[0] = primario
+
+            if not nodes:
+                print(f"Error: no hay DataNodes asignados para bloque {block_index}")
+                sys.exit(1)
+
+            primary  = nodes[0]
+            pipeline = nodes[1:]    # nodos para replicación pipeline
+
+            print(
+                f"  Bloque {block_index+1}/{block_count}: {_human_size(len(block_data))} "
+                f"→ {primary.node_id} (pipeline: {[n.node_id for n in pipeline]})",
+                end=' ... ', flush=True
+            )
+
+            # Subir con reintentos y pipeline
+            try:
+                upload_block(
+                    primary.host, primary.port,
+                    block_id, block_data, checksum,
+                    pipeline_nodes=pipeline,
+                )
+            except IOError as e:
+                print(f"\nError: {e}")
+                sys.exit(1)
+
+            # Confirmar bloque al NameNode
+            stub2, ch2 = _nn_stub()
+            try:
+                confirm_resp = stub2.ConfirmBlock(
+                    dfs_pb2.ConfirmBlockRequest(
+                        token=token,
+                        file_id=file_id,
+                        block_id=block_id,
+                        block_index=block_index,
+                        block_size=len(block_data),
+                        checksum=checksum,
+                        node_ids=[n.node_id for n in nodes],
+                    ),
+                    timeout=10,
+                )
+                if not confirm_resp.success:
+                    print(f"\nAdvertencia: confirmación fallida para bloque {block_id}: {confirm_resp.message}")
+                else:
+                    confirmed += 1
+                    print("OK")
+            except grpc.RpcError as e:
+                print(f"\nError al confirmar bloque {block_id}: {e.details()}")
+            finally:
+                ch2.close()
+
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    print(f"\n✓ Archivo subido exitosamente: {remote_path}")
+    print(f"  {confirmed}/{block_count} bloques confirmados | file_id={file_id}")
 
 
 def cmd_get(args):
-    """Descargar archivo del DFS – implementación completa en Día 2."""
-    _require_auth()
-    print("Error: comando 'get' disponible a partir del Día 2 (Viernes 22 Mayo)")
-    sys.exit(1)
+    """
+    Descargar un archivo del DFS a una ruta local.
+    Flujo:
+      1. Solicitar ubicaciones de bloques al NameNode (GetFile)
+      2. Para cada bloque: descargar desde primera réplica disponible (fallback a otras)
+      3. Verificar SHA-256 de cada bloque
+      4. Ensamblar bloques en archivo local
+    """
+    token       = _require_auth()
+    remote_path = args.remote_path
+    local_path  = args.local_path
+
+    # Si es un directorio, usar el nombre del archivo remoto
+    if os.path.isdir(local_path):
+        filename   = os.path.basename(remote_path)
+        local_path = os.path.join(local_path, filename)
+
+    stub, ch = _nn_stub()
+    try:
+        get_resp = stub.GetFile(
+            dfs_pb2.GetFileRequest(token=token, filepath=remote_path),
+            timeout=30,
+        )
+    except grpc.RpcError as e:
+        print(f"Error de conexión al NameNode: {e.details()}")
+        sys.exit(1)
+    finally:
+        ch.close()
+
+    if not get_resp.success:
+        print(f"Error: {get_resp.message}")
+        sys.exit(1)
+
+    filesize    = get_resp.filesize
+    locations   = get_resp.locations    # lista de BlockLocation
+    block_count = len(locations)
+
+    print(f"Descargando: {remote_path} ({_human_size(filesize)}, {block_count} bloque(s))")
+    print(f"  → {local_path}")
+
+    downloaded_blocks = []   # lista de (block_index, data)
+
+    for loc in sorted(locations, key=lambda x: x.block_index):
+        block_id  = loc.block_id
+        block_idx = loc.block_index
+        checksum  = loc.checksum
+        nodes     = list(loc.datanodes)
+
+        print(
+            f"  Bloque {block_idx+1}/{block_count}: "
+            f"réplicas={[n.node_id for n in nodes]}",
+            end=' ... ', flush=True
+        )
+
+        data = None
+        last_error = None
+
+        # Intentar cada réplica hasta obtener el bloque
+        for node in nodes:
+            try:
+                data = download_block(node.host, node.port, block_id, checksum)
+
+                # Reportar bloque corrupto al NameNode si es necesario (manejado por IOError de checksum)
+                break
+            except IOError as e:
+                last_error = e
+                err_str = str(e)
+                if 'corrupto' in err_str or 'checksum' in err_str:
+                    # Reportar corrupción al NameNode
+                    try:
+                        stub3, ch3 = _nn_stub()
+                        token_curr = AuthClient.get_token() or token
+                        stub3.ReportCorruptBlock(
+                            dfs_pb2.ReportCorruptBlockRequest(
+                                token=token_curr,
+                                block_id=block_id,
+                                node_id=node.node_id,
+                            ),
+                            timeout=5,
+                        )
+                        ch3.close()
+                    except Exception:
+                        pass
+                    print(f"\n  Advertencia: bloque corrupto en {node.node_id}, probando réplica...")
+                else:
+                    print(f"\n  Advertencia: nodo {node.node_id} no disponible, probando réplica...")
+                continue
+
+        if data is None:
+            print(f"\nError: no se pudo descargar bloque {block_id}: {last_error}")
+            sys.exit(1)
+
+        downloaded_blocks.append((block_idx, data))
+        print("OK")
+
+    # Ensamblar archivo
+    try:
+        total_bytes = assemble_blocks(downloaded_blocks, local_path)
+        print(f"\n✓ Archivo descargado exitosamente: {local_path} ({_human_size(total_bytes)})")
+    except Exception as e:
+        print(f"Error al ensamblar bloques: {e}")
+        sys.exit(1)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
