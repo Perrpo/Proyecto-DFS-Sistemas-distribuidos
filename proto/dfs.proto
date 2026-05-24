@@ -17,11 +17,14 @@ service NameNodeService {
   rpc ListFiles(ListFilesRequest)   returns (ListFilesResponse);
 
   // Namespace (directorios)
-  rpc MakeDir(MakeDirRequest)   returns (MakeDirResponse);
+  rpc MakeDir(MakeDirRequest)     returns (MakeDirResponse);
   rpc RemoveDir(RemoveDirRequest) returns (RemoveDirResponse);
 
+  // Estado del clúster (para CLI status)
+  rpc GetClusterStatus(ClusterStatusRequest) returns (ClusterStatusResponse);
+
   // DataNode → NameNode
-  rpc Heartbeat(HeartbeatRequest)   returns (HeartbeatResponse);
+  rpc Heartbeat(HeartbeatRequest)     returns (HeartbeatResponse);
   rpc BlockReport(BlockReportRequest) returns (BlockReportResponse);
 
   // Confirmar bloques almacenados (cliente → NameNode tras PUT)
@@ -172,13 +175,37 @@ message MakeDirResponse {
 }
 
 message RemoveDirRequest {
-  string token = 1;
-  string path  = 2;
+  string token     = 1;
+  string path      = 2;
+  bool   recursive = 3;  // si true, elimina contenido recursivamente
 }
 
 message RemoveDirResponse {
   bool   success = 1;
   string message = 2;
+}
+
+message ClusterStatusRequest {
+  string token = 1;
+}
+
+// Info de un DataNode para el reporte de estado
+message DataNodeStatus {
+  string node_id         = 1;
+  string host            = 2;
+  int32  port            = 3;
+  string status          = 4;  // active | inactive
+  int32  block_count     = 5;
+  int64  available_space = 6;
+  string last_heartbeat  = 7;
+}
+
+message ClusterStatusResponse {
+  bool                    success      = 1;
+  repeated DataNodeStatus datanodes    = 2;
+  int32                   total_blocks = 3;
+  int32                   total_files  = 4;
+  string                  message      = 5;
 }
 
 // ============================================================

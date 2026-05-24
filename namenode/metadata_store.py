@@ -372,3 +372,37 @@ class MetadataStore:
                 (user_id, prefix + '%')
             ).fetchone()[0]
             return file_count == 0 and dir_count == 0
+
+    def list_all_files_under(self, user_id: str, path: str):
+        """Lista todos los archivos activos bajo path (recursivo)."""
+        with self._get_conn() as conn:
+            prefix = path.rstrip('/') + '/'
+            rows = conn.execute(
+                "SELECT * FROM files WHERE user_id=? AND (filepath LIKE ? OR filepath=?) AND status='active'",
+                (user_id, prefix + '%', path)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_all_dirs_under(self, user_id: str, path: str):
+        """Lista todos los subdirectorios bajo path (recursivo, excluye path mismo)."""
+        with self._get_conn() as conn:
+            prefix = path.rstrip('/') + '/'
+            rows = conn.execute(
+                "SELECT * FROM directories WHERE user_id=? AND path LIKE ?",
+                (user_id, prefix + '%')
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_total_file_count(self) -> int:
+        """Total de archivos activos en el sistema."""
+        with self._get_conn() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM files WHERE status='active'"
+            ).fetchone()[0]
+
+    def get_total_block_count(self) -> int:
+        """Total de bloques únicos confirmados en el sistema."""
+        with self._get_conn() as conn:
+            return conn.execute(
+                "SELECT COUNT(DISTINCT block_id) FROM block_locations WHERE status='active'"
+            ).fetchone()[0]

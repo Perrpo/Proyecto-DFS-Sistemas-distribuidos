@@ -34,7 +34,7 @@ class NamespaceManager:
             return False, f"Error al crear directorio: {e}"
 
     # ─── rmdir ─────────────────────────────────────────────────────────────────
-    def remove_dir(self, user_id: str, path: str):
+    def remove_dir(self, user_id: str, path: str, recursive: bool = False):
         path = _normalize(path)
 
         if path == '/':
@@ -43,8 +43,14 @@ class NamespaceManager:
         if not self.store.get_directory(user_id, path):
             return False, f"Error: directorio no existe: {path}"
 
+        if recursive:
+            return self._remove_dir_recursive(user_id, path)
+
         if not self.store.directory_is_empty(user_id, path):
-            return False, f"Error: directorio no está vacío: {path}"
+            return False, (
+                f"Error: directorio no está vacío: {path}. "
+                f"Use 'rmdir -r' para eliminar recursivamente."
+            )
 
         try:
             self.store.delete_directory(user_id, path)
@@ -53,6 +59,30 @@ class NamespaceManager:
         except Exception as e:
             logger.error(f"remove_dir error: {e}")
             return False, f"Error al eliminar directorio: {e}"
+
+    def _remove_dir_recursive(self, user_id: str, path: str):
+        """Elimina recursivamente todos los archivos y subdirectorios bajo path."""
+        try:
+            # 1. Eliminar todos los archivos directamente bajo este directorio y subdirectorios
+            all_files = self.store.list_all_files_under(user_id, path)
+            for f in all_files:
+                self.store.mark_file_deleted(user_id, f['filepath'])
+                self.store.delete_blocks_for_file(f['file_id'])
+
+            # 2. Eliminar subdirectorios (de los más profundos hacia arriba)
+            all_dirs = self.store.list_all_dirs_under(user_id, path)
+            all_dirs_sorted = sorted(all_dirs, key=lambda d: d['path'].count('/'), reverse=True)
+            for d in all_dirs_sorted:
+                self.store.delete_directory(user_id, d['path'])
+
+            # 3. Eliminar el directorio raíz de la operación
+            self.store.delete_directory(user_id, path)
+            logger.info(f"rmdir -r: {path} ({len(all_files)} archivos, {len(all_dirs)} subdirs) → usuario {user_id}")
+            return True, f"Directorio eliminado recursivamente: {path} ({len(all_files)} archivos eliminados)"
+        except Exception as e:
+            logger.error(f"remove_dir_recursive error: {e}")
+            return False, f"Error al eliminar directorio: {e}"
+
 
     # ─── ls ────────────────────────────────────────────────────────────────────
     def list_dir(self, user_id: str, directory: str):

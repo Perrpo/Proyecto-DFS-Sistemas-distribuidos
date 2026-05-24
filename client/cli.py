@@ -2,8 +2,7 @@
 """
 client/cli.py
 Interfaz de línea de comandos de MiniDFS.
-Comandos: register, login, logout, put, get, ls, rm, mkdir, rmdir
-Día 2: put y get completamente implementados.
+Comandos: register, login, logout, put, get, ls, rm, mkdir, rmdir, status
 """
 import argparse
 import sys
@@ -143,7 +142,12 @@ def cmd_rmdir(args):
     stub, ch = _nn_stub()
     try:
         r = stub.RemoveDir(
-            dfs_pb2.RemoveDirRequest(token=token, path=args.path), timeout=10
+            dfs_pb2.RemoveDirRequest(
+                token=token,
+                path=args.path,
+                recursive=getattr(args, 'recursive', False),
+            ),
+            timeout=15,
         )
         print(r.message)
         if not r.success:
@@ -390,6 +394,53 @@ def cmd_get(args):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Status del clúster
+# ══════════════════════════════════════════════════════════════════════════════
+def cmd_status(args):
+    """
+    Muestra el estado del clúster MiniDFS:
+    - DataNodes activos/inactivos con bloques y espacio libre
+    - Total de archivos y bloques en el sistema
+    """
+    token = _require_auth()
+    stub, ch = _nn_stub()
+    try:
+        r = stub.GetClusterStatus(
+            dfs_pb2.ClusterStatusRequest(token=token), timeout=10
+        )
+    except grpc.RpcError as e:
+        print(f"Error de conexión al NameNode: {e.details()}")
+        sys.exit(1)
+    finally:
+        ch.close()
+
+    if not r.success:
+        print(f"Error: {r.message}")
+        sys.exit(1)
+
+    print()
+    print("╔══════════════════════════════════════════════════════════════╗")
+    print("║            MiniDFS – Estado del Clúster                     ║")
+    print("╚══════════════════════════════════════════════════════════════╝")
+    print()
+    print(f"  Archivos activos : {r.total_files}")
+    print(f"  Bloques únicos   : {r.total_blocks}")
+    print(f"  DataNodes        : {len(r.datanodes)}")
+    print()
+    print(f"  {'ID':<8} {'Host':<18} {'Puerto':>6}  {'Estado':<10} {'Bloques':>8}  {'Espacio libre':>14}  Último HB")
+    print("  " + "─" * 78)
+    for dn in r.datanodes:
+        estado = "✅ activo" if dn.status == 'active' else "❌ inactivo"
+        espacio = _human_size(dn.available_space) if dn.available_space > 0 else "N/A"
+        hb = dn.last_heartbeat[:19].replace('T', ' ') if dn.last_heartbeat else 'N/A'
+        print(
+            f"  {dn.node_id:<8} {dn.host:<18} {dn.port:>6}  {estado:<14} {dn.block_count:>8}  "
+            f"{espacio:>14}  {hb}"
+        )
+    print()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Parser principal
 # ══════════════════════════════════════════════════════════════════════════════
 def build_parser() -> argparse.ArgumentParser:
@@ -407,6 +458,8 @@ Ejemplos:
   python cli.py get      /datos/video.mp4  ./descargado.mp4
   python cli.py rm       /datos/video.mp4
   python cli.py rmdir    /datos
+  python cli.py rmdir -r /datos          # elimina recursivamente
+  python cli.py status                   # estado del clúster
   python cli.py logout
         """
     )
@@ -457,9 +510,15 @@ Ejemplos:
     p.set_defaults(func=cmd_mkdir)
 
     # rmdir
-    p = sub.add_parser('rmdir', help='Eliminar directorio vacío')
+    p = sub.add_parser('rmdir', help='Eliminar directorio (use -r para recursivo)')
     p.add_argument('path', help='Ruta del directorio')
+    p.add_argument('-r', '--recursive', action='store_true',
+                   help='Eliminar recursivamente el directorio y su contenido')
     p.set_defaults(func=cmd_rmdir)
+
+    # status
+    p = sub.add_parser('status', help='Mostrar estado del clúster MiniDFS')
+    p.set_defaults(func=cmd_status)
 
     return parser
 

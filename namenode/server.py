@@ -210,8 +210,38 @@ class NameNodeServicer(dfs_pb2_grpc.NameNodeServiceServicer):
         valid, user_id = self._validate(request.token)
         if not valid:
             return dfs_pb2.RemoveDirResponse(success=False, message=user_id)
-        success, msg = self.namespace.remove_dir(user_id, request.path)
+        success, msg = self.namespace.remove_dir(user_id, request.path, request.recursive)
         return dfs_pb2.RemoveDirResponse(success=success, message=msg)
+
+    def GetClusterStatus(self, request, context):
+        valid, user_id = self._validate(request.token)
+        if not valid:
+            return dfs_pb2.ClusterStatusResponse(success=False, message=user_id)
+
+        datanodes = self.store.get_all_datanodes()
+        total_blocks = self.store.get_total_block_count()
+        total_files  = self.store.get_total_file_count()
+
+        dn_statuses = [
+            dfs_pb2.DataNodeStatus(
+                node_id         = dn['node_id'],
+                host            = dn['host'],
+                port            = dn['port'],
+                status          = dn['status'],
+                block_count     = dn['block_count'],
+                available_space = dn['available_space'],
+                last_heartbeat  = dn['last_heartbeat'],
+            )
+            for dn in datanodes
+        ]
+
+        logger.info(f"GetClusterStatus: {len(datanodes)} DataNodes, {total_blocks} bloques, {total_files} archivos")
+        return dfs_pb2.ClusterStatusResponse(
+            success      = True,
+            datanodes    = dn_statuses,
+            total_blocks = total_blocks,
+            total_files  = total_files,
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # DataNode → NameNode

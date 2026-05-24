@@ -77,6 +77,11 @@ class NameNodeServiceStub(object):
                 request_serializer=proto_dot_dfs__pb2.RemoveDirRequest.SerializeToString,
                 response_deserializer=proto_dot_dfs__pb2.RemoveDirResponse.FromString,
                 _registered_method=True)
+        self.GetClusterStatus = channel.unary_unary(
+                '/dfs.NameNodeService/GetClusterStatus',
+                request_serializer=proto_dot_dfs__pb2.ClusterStatusRequest.SerializeToString,
+                response_deserializer=proto_dot_dfs__pb2.ClusterStatusResponse.FromString,
+                _registered_method=True)
         self.Heartbeat = channel.unary_unary(
                 '/dfs.NameNodeService/Heartbeat',
                 request_serializer=proto_dot_dfs__pb2.HeartbeatRequest.SerializeToString,
@@ -156,6 +161,13 @@ class NameNodeServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetClusterStatus(self, request, context):
+        """Estado del clúster (para CLI status)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Heartbeat(self, request, context):
         """DataNode → NameNode
         """
@@ -225,6 +237,11 @@ def add_NameNodeServiceServicer_to_server(servicer, server):
                     servicer.RemoveDir,
                     request_deserializer=proto_dot_dfs__pb2.RemoveDirRequest.FromString,
                     response_serializer=proto_dot_dfs__pb2.RemoveDirResponse.SerializeToString,
+            ),
+            'GetClusterStatus': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetClusterStatus,
+                    request_deserializer=proto_dot_dfs__pb2.ClusterStatusRequest.FromString,
+                    response_serializer=proto_dot_dfs__pb2.ClusterStatusResponse.SerializeToString,
             ),
             'Heartbeat': grpc.unary_unary_rpc_method_handler(
                     servicer.Heartbeat,
@@ -466,6 +483,33 @@ class NameNodeService(object):
             '/dfs.NameNodeService/RemoveDir',
             proto_dot_dfs__pb2.RemoveDirRequest.SerializeToString,
             proto_dot_dfs__pb2.RemoveDirResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetClusterStatus(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dfs.NameNodeService/GetClusterStatus',
+            proto_dot_dfs__pb2.ClusterStatusRequest.SerializeToString,
+            proto_dot_dfs__pb2.ClusterStatusResponse.FromString,
             options,
             channel_credentials,
             insecure,
