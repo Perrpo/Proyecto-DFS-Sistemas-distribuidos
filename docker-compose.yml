@@ -1,7 +1,7 @@
 version: '3.9'
 
 # ============================================================
-# MiniDFS – Docker Compose
+# MiniDFS – Docker Compose (Día 3: final con healthchecks)
 # Servicios: 1 NameNode + 3 DataNodes
 # Red interna: dfs-network (bridge)
 # ============================================================
@@ -27,6 +27,7 @@ services:
     hostname: namenode
     environment:
       - NAMENODE_PORT=50051
+      - NAMENODE_HOST=namenode
       - NAMENODE_DB_PATH=/data/namenode.db
       - BLOCK_SIZE=67108864
       - REPLICATION_FACTOR=3
@@ -44,10 +45,11 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c",
-             "import grpc; grpc.insecure_channel('localhost:50051')"]
+             "import grpc, sys; ch=grpc.insecure_channel('localhost:50051'); sys.exit(0)"]
       interval: 15s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 10s
 
   # ── DataNode 1 ────────────────────────────────────────────
   datanode1:
@@ -63,6 +65,9 @@ services:
       - DATANODE_HOST=datanode1
       - DATANODE_PORT=50061
       - DATANODE_STORAGE_PATH=/data/blocks
+      - HEARTBEAT_INTERVAL=10
+      - HEARTBEAT_TIMEOUT=30
+      - BLOCK_REPORT_INTERVAL=60
       - LOG_LEVEL=INFO
     ports:
       - "50061:50061"
@@ -71,8 +76,16 @@ services:
     networks:
       - dfs-network
     depends_on:
-      - namenode
+      namenode:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import grpc, sys; ch=grpc.insecure_channel('localhost:50061'); sys.exit(0)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ── DataNode 2 ────────────────────────────────────────────
   datanode2:
@@ -88,6 +101,9 @@ services:
       - DATANODE_HOST=datanode2
       - DATANODE_PORT=50062
       - DATANODE_STORAGE_PATH=/data/blocks
+      - HEARTBEAT_INTERVAL=10
+      - HEARTBEAT_TIMEOUT=30
+      - BLOCK_REPORT_INTERVAL=60
       - LOG_LEVEL=INFO
     ports:
       - "50062:50062"
@@ -96,8 +112,16 @@ services:
     networks:
       - dfs-network
     depends_on:
-      - namenode
+      namenode:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import grpc, sys; ch=grpc.insecure_channel('localhost:50062'); sys.exit(0)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ── DataNode 3 ────────────────────────────────────────────
   datanode3:
@@ -113,6 +137,9 @@ services:
       - DATANODE_HOST=datanode3
       - DATANODE_PORT=50063
       - DATANODE_STORAGE_PATH=/data/blocks
+      - HEARTBEAT_INTERVAL=10
+      - HEARTBEAT_TIMEOUT=30
+      - BLOCK_REPORT_INTERVAL=60
       - LOG_LEVEL=INFO
     ports:
       - "50063:50063"
@@ -121,5 +148,13 @@ services:
     networks:
       - dfs-network
     depends_on:
-      - namenode
+      namenode:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import grpc, sys; ch=grpc.insecure_channel('localhost:50063'); sys.exit(0)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

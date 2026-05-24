@@ -1,6 +1,7 @@
 """
 datanode/block_store.py
 Almacenamiento local de bloques en disco con verificación SHA-256.
+Día 3: se agregan store_block() y retrieve_block() que usan verify_checksum().
 """
 import os
 import hashlib
@@ -26,6 +27,70 @@ class BlockStore:
 
     def block_exists(self, block_id: str) -> bool:
         return os.path.exists(self._path(block_id))
+
+    # ─── API de alto nivel (usada por datanode/server.py) ─────────────────────
+    def store_block(self, block_id: str, data: bytes) -> tuple:
+        """
+        Almacena un bloque en disco y verifica la integridad por SHA-256.
+
+        Args:
+            block_id: Identificador único del bloque
+            data:     Datos completos del bloque (bytes)
+
+        Returns:
+            (success: bool, message: str)
+        """
+        try:
+            checksum = self.write_block(block_id, data)
+            # Verificar que lo escrito es idéntico a lo recibido
+            valid, actual = self.verify_checksum(block_id, checksum)
+            if not valid:
+                # Eliminar archivo corrupto
+                try:
+                    os.remove(self._path(block_id))
+                except OSError:
+                    pass
+                return False, f"Error de integridad al almacenar bloque {block_id}"
+            return True, f"Bloque {block_id} almacenado ({len(data):,} bytes)"
+        except Exception as e:
+            logger.error(f"store_block {block_id}: {e}", exc_info=True)
+            return False, f"Error interno al almacenar bloque {block_id}: {e}"
+
+    def retrieve_block(self, block_id: str) -> tuple:
+        """
+        Lee un bloque completo del disco y verifica su integridad SHA-256.
+
+        Returns:
+            (data: bytes, error: str|None)
+            Si hay error: (None, mensaje_de_error)
+        """
+        path = self._path(block_id)
+        if not os.path.exists(path):
+            return None, f"Bloque no encontrado: {block_id}"
+
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+
+            # Calcular checksum de lo leído y comparar con el archivo en disco
+            # (doble lectura evitada: sólo calculamos sobre los datos leídos)
+            actual_checksum = hashlib.sha256(data).hexdigest()
+
+            # Verificar contra el checksum recalculado leyendo de nuevo el archivo
+            valid, stored_checksum = self.verify_checksum(block_id, actual_checksum)
+            if not valid:
+                logger.error(
+                    f"retrieve_block {block_id}: checksum mismatch "
+                    f"(almacenado={stored_checksum[:12]} leído={actual_checksum[:12]})"
+                )
+                return None, f"Bloque corrupto: {block_id} (checksum mismatch)"
+
+            logger.debug(f"retrieve_block {block_id}: {len(data):,} bytes OK")
+            return data, None
+
+        except Exception as e:
+            logger.error(f"retrieve_block {block_id}: {e}", exc_info=True)
+            return None, f"Error al leer bloque {block_id}: {e}"
 
     # ─── Escritura ─────────────────────────────────────────────────────────────
     def write_block(self, block_id: str, data: bytes) -> str:
@@ -88,7 +153,7 @@ class BlockStore:
     # ─── Verificación ──────────────────────────────────────────────────────────
     def verify_checksum(self, block_id: str, expected: str) -> tuple:
         """
-        Verifica la integridad del bloque.
+        Verifica la integridad del bloque leyendo el archivo en disco.
         Retorna: (valid: bool, actual_checksum: str)
         """
         path = self._path(block_id)
