@@ -290,9 +290,9 @@ El sistema fue desplegado y probado en 4 instancias EC2 independientes en la reg
 | Instancia | Tipo | IP Privada | Servicio |
 |---|---|---|---|
 | NameNode | t3.small | 172.31.0.165 | NameNode gRPC :50051 |
-| DataNode 1 | t3.small | 172.31.5.1 | DataNode gRPC :50061 |
-| DataNode 2 | t3.small | 172.31.9.175 | DataNode gRPC :50062 |
-| DataNode 3 | t3.small | 172.31.9.76 | DataNode gRPC :50063 |
+| DataNode 1 | t3.medium | 172.31.5.1 | DataNode gRPC :50061 |
+| DataNode 2 | t3.medium | 172.31.9.175 | DataNode gRPC :50062 |
+| DataNode 3 | t3.medium | 172.31.9.76 | DataNode gRPC :50063 |
 
 ### Security Group (proyecto_dfs)
 
