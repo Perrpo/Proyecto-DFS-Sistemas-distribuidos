@@ -104,7 +104,7 @@ DataNode ──► BlockReport (cada 60s) ──► NameNode
 ## 📁 Estructura del Proyecto
 
 ```
-Proyecto DFS/
+Proyecto-DFS-Sistemas-distribuidos/
 ├── proto/
 │   ├── dfs.proto              # Contrato gRPC (servicios y mensajes)
 │   ├── dfs_pb2.py             # Stubs de mensajes generados
@@ -176,7 +176,7 @@ Proyecto DFS/
 
 ```bash
 git clone https://github.com/Perrpo/Proyecto-DFS-Sistemas-distribuidos.git
-cd "Proyecto DFS"
+cd Proyecto-DFS-Sistemas-distribuidos
 ```
 
 ### 2. Instalar dependencias
