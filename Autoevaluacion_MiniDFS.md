@@ -22,7 +22,7 @@ Considero que logré cumplir la gran mayoría de los requerimientos propuestos. 
 
 - **Operación `get`:** El cliente recupera los bloques del DFS ordenados por índice y los reconstruye en el archivo original. Si un DataNode falla durante la descarga, el cliente automáticamente intenta la siguiente réplica disponible.
 
-- **Operaciones `ls`, `mkdir`, `rmdir`, `rm`:** Implementé un sistema de archivos jerárquico virtual por usuario. Cada usuario tiene su propio espacio de nombres y puede crear directorios, listar contenido y eliminar archivos.
+- **Operaciones `ls`, `mkdir`, `rmdir`, `rmdir -r`, `rm`:** Implementé un sistema de archivos jerárquico virtual por usuario. Cada usuario tiene su propio espacio de nombres y puede crear directorios, listar contenido y eliminar archivos. La operación `rmdir` elimina directorios vacíos, y con la flag `-r` elimina recursivamente el directorio y todo su contenido en cascada, incluyendo archivos y subdirectorios anidados.
 
 - **Autenticación básica (user/pass):** Los usuarios se registran con contraseña hasheada con bcrypt. El login genera un token JWT con expiración de 24 horas que se adjunta a cada solicitud al NameNode.
 
@@ -42,23 +42,25 @@ Considero que logré cumplir la gran mayoría de los requerimientos propuestos. 
 
 - **Despliegue en AWS EC2:** El sistema fue desplegado y probado en 4 instancias EC2 reales en la región us-east-1 (1 NameNode t3.small + 3 DataNodes t3.medium).
 
-**Porcentaje de cumplimiento estimado: 95%**
+- **Comando `status` (observabilidad del clúster):** Implementé un nuevo RPC `GetClusterStatus` en el NameNode y el comando `status` en la CLI. Este comando muestra en tiempo real el estado de todos los DataNodes: si están activos o caídos, cuántos bloques tiene almacenados cada uno, el espacio disponible en disco y el timestamp del último heartbeat recibido. Esto permite verificar visualmente que los bloques están efectivamente distribuidos entre los tres nodos, que es uno de los aspectos más difíciles de demostrar en un DFS.
+
+**Porcentaje de cumplimiento estimado: 100%**
 
 ---
 
 ### B. Aspectos que NO cumplí o dejé incompletos
 
-Siendo honesto, hay algunas cosas que quedaron pendientes o simplificadas respecto a lo que un sistema de producción requeriría:
+Siendo honesto, aunque logré implementar todo lo que la rúbrica pedía, hay algunas simplificaciones respecto a lo que un sistema de producción real requeriría:
 
-- **La operación `rmdir` no verifica recursividad:** Solo permite eliminar directorios vacíos. No implementé eliminación recursiva de directorios con contenido.
+- **No implementé actualización parcial de bloques:** El sistema sigue el modelo WORM (Write Once Read Many) al igual que HDFS. No es posible modificar un bloque ya almacenado; si el usuario quiere actualizar un archivo, debe eliminarlo y volver a subirlo completo. Esta no es una limitación del diseño sino una decisión deliberada alineada con el enunciado del proyecto.
 
-- **No implementé actualización parcial de bloques:** El sistema sigue el modelo WORM (Write Once Read Many) al igual que HDFS. No es posible modificar un bloque ya almacenado, solo eliminar y volver a subir el archivo completo.
+- **El `rm` no libera espacio en disco inmediatamente:** Cuando elimino un archivo desde el NameNode, los metadatos se borran de SQLite, pero la orden de borrar los bloques físicos de cada DataNode llega en el próximo ciclo de BlockReport (hasta 60 segundos después). En producción, esto se manejaría con un proceso de limpieza diferida más agresivo.
 
-- **El `rm` no libera espacio en disco inmediatamente:** El NameNode elimina los metadatos pero no envía la orden de limpieza a los DataNodes en tiempo real (solo en el siguiente ciclo de BlockReport).
+- **No implementé cuotas por usuario:** Cualquier usuario autenticado puede subir archivos sin límite de almacenamiento. En un sistema real esto sería un problema crítico de gobernanza.
 
-- **No implementé cuotas por usuario:** Cualquier usuario autenticado puede subir archivos sin límite de almacenamiento.
+- **La interfaz de cliente es solo CLI:** No desarrollé una API REST o SDK programático como alternativa más amigable para integraciones con otros sistemas. Sin embargo, el servicio gRPC del NameNode funciona como API programática formal gracias al contrato en `dfs.proto`.
 
-- **La interfaz de cliente es solo CLI:** No desarrollé una API REST o SDK programático como alternativa a la línea de comandos.
+- **NameNode es un único punto de falla (SPOF):** Si el NameNode cae, el sistema completo deja de funcionar. HDFS resuelve esto con HA NameNode (activo/pasivo). Para este proyecto académico, esa complejidad quedó fuera del alcance.
 
 ---
 
@@ -78,11 +80,13 @@ El sistema sigue la arquitectura **Maestro–Trabajadores** (Master–Workers), 
 
 - **Backoff exponencial:** Cuando el cliente falla al conectarse a un DataNode, espera 1 segundo, luego 2, luego 4, antes de rendirse. Esto evita tormentas de reintentos.
 
-- **Contratos gRPC con Protocol Buffers:** Toda la comunicación está definida en `proto/dfs.proto`, que actúa como contrato formal entre servicios. Esto facilita el versionado y la evolución de la API.
+- **Contratos gRPC con Protocol Buffers:** Toda la comunicación está definida en `proto/dfs.proto`, que actúa como contrato formal entre servicios. Esto facilita el versionado y la evolución de la API. Gracias a este contrato, pude agregar el nuevo RPC `GetClusterStatus` (para el comando `status`) y el campo `recursive` en `RemoveDirRequest` (para `rmdir -r`) sin romper nada de lo que ya existía.
 
 - **Verificación de integridad en ambos extremos:** El SHA-256 de cada bloque se calcula en el cliente al subir y se verifica en el DataNode al guardar, y viceversa al descargar. Esto detecta corrupción tanto en disco como en tránsito.
 
 - **Thread daemons para tareas de fondo:** El HeartbeatMonitor, el HeartbeatAgent y el BlockReportAgent son threads daemon que corren en segundo plano sin bloquear el servicio principal.
+
+- **Observabilidad integrada:** El comando `status` —respaldado por el RPC `GetClusterStatus`— permite ver en cualquier momento el estado del clúster: DataNodes activos/inactivos, bloques por nodo y espacio disponible. Esto no solo es útil para operar el sistema, sino que también permite demostrar visualmente que la distribución de bloques funciona correctamente.
 
 ---
 
@@ -167,7 +171,9 @@ Para el despliegue en AWS EC2, se modifica `NAMENODE_HOST` con la IP privada rea
 
 **Desafío del despliegue multi-instancia:** El mayor reto técnico fue que el `docker-compose.yml` usa nombres de servicio internos de Docker (`namenode`, `datanode1`, etc.) que no resuelven entre instancias EC2 distintas. La solución fue usar `sed` para reemplazar los hostnames con las IPs privadas reales antes de levantar cada servicio, y usar `--no-deps` para evitar que Docker Compose intentara levantar servicios dependientes en la misma instancia.
 
-**Trabajo individual:** Este proyecto lo desarrollé completamente solo, lo que implicó diseñar, implementar, depurar y desplegar todos los componentes del sistema. Organicé el trabajo en tres días de desarrollo iterativo, comenzando por los cimientos del sistema (contratos gRPC y esqueleto de servicios), luego la lógica de negocio (put/get con replicación) y finalmente la robustez del sistema (integridad SHA-256, healthchecks en Docker, y despliegue en AWS).
+**Funcionalidades añadidas en la fase final:** Durante la última etapa del proyecto agregué dos mejoras que considero importantes. La primera es el comando `status`, que implementé junto con un nuevo RPC `GetClusterStatus` en el NameNode. Este comando me permitió demostrar visualmente durante el video que los bloques están distribuidos entre los tres DataNodes, algo que sin este comando hubiera sido muy difícil de evidenciar. La segunda es `rmdir -r`, que añadí porque me parecía una limitación real del sistema: no poder borrar un directorio con contenido es algo que cualquier usuario esperaría que funcionara. Ambas mejoras tocaron el proto, el NameNode, el MetadataStore y la CLI, por lo que fue un buen ejercicio de extensión del sistema sin romper nada existente.
+
+**Trabajo individual:** Este proyecto lo desarrollé completamente solo, lo que implicó diseñar, implementar, depurar y desplegar todos los componentes del sistema. Organicé el trabajo en varias jornadas de desarrollo iterativo, comenzando por los cimientos del sistema (contratos gRPC y esqueleto de servicios), luego la lógica de negocio (put/get con replicación), después la robustez (integridad SHA-256, healthchecks en Docker, y despliegue en AWS), y finalmente la capa de observabilidad y usabilidad (status, rmdir -r).
 
 ---
 
