@@ -43,3 +43,7 @@ logs/
 /tmp_test/
 test_files/
 downloaded/
+
+# Bases de datos de prueba
+*.db
+test_verify.db
