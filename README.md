@@ -40,7 +40,7 @@ El sistema sigue una arquitectura **Maestro–Trabajadores** donde el NameNode a
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
 │                           CLIENTE (CLI)                                │
-│  register | login | put | get | ls | mkdir | rmdir | rm | logout       │
+│  register | login | put | get | ls | mkdir | rmdir | rm | status | logout |
 └────────────┬──────────────────────────────────┬───────────────────────┘
              │ gRPC (metadatos + auth)           │ gRPC streaming (bloques)
              ▼                                  ▼
@@ -231,6 +231,7 @@ python client/cli.py logout
 python client/cli.py ls    [/ruta]          # Listar archivos y directorios
 python client/cli.py mkdir /ruta/dir        # Crear directorio
 python client/cli.py rmdir /ruta/dir        # Eliminar directorio vacío
+python client/cli.py rmdir -r /ruta/dir    # Eliminar directorio recursivamente (con contenido)
 python client/cli.py rm    /ruta/archivo    # Eliminar archivo
 ```
 
@@ -244,6 +245,30 @@ python client/cli.py put ./video.mp4 /media/video.mp4
 python client/cli.py get /media/video.mp4 ./video_local.mp4
 ```
 
+### Estado del clúster
+
+```bash
+python client/cli.py status
+```
+
+Muestra en tiempo real el estado de todos los DataNodes, el número de bloques almacenados por nodo, el espacio disponible y el último heartbeat recibido:
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║            MiniDFS – Estado del Clúster                     ║
+╚══════════════════════════════════════════════════════════════╝
+
+  Archivos activos : 1
+  Bloques únicos   : 3
+  DataNodes        : 3
+
+  ID       Host               Puerto  Estado      Bloques  Espacio libre  Último HB
+  ──────────────────────────────────────────────────────────────────────────────────
+  dn1      172.31.5.1          50061  ✅ activo          1      37.3 GB  2026-05-24 ...
+  dn2      172.31.9.175        50062  ✅ activo          1      37.3 GB  2026-05-24 ...
+  dn3      172.31.9.76         50063  ✅ activo          1      37.3 GB  2026-05-24 ...
+```
+
 ### Mensajes de error
 
 | Error | Causa |
@@ -252,6 +277,7 @@ python client/cli.py get /media/video.mp4 ./video_local.mp4
 | `Error: archivo no encontrado` | El path no existe en el DFS |
 | `Error: no hay DataNodes suficientes` | Menos de 3 DataNodes activos |
 | `Error: bloque corrupto` | SHA-256 mismatch — se intenta réplica alternativa |
+| `Error: directorio no está vacío` | Usar `rmdir -r` para eliminación recursiva |
 
 ---
 
