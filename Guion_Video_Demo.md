@@ -10,7 +10,8 @@
 | 1 | Introducción y presentación | 1 min |
 | 2 | Arquitectura del sistema | 2 min |
 | 3 | Recorrido por el código | 3 min |
-| 4 | Demo en vivo – AWS EC2 | 5 min |
+| 4 | Demo en vivo – AWS EC2 (put, get, sha256) | 5 min |
+| 4b | Demo nuevas funciones (status, rmdir -r) | 2 min |
 | 5 | Tolerancia a fallos | 2 min |
 | 6 | Cierre | 1 min |
 
@@ -173,6 +174,46 @@ sha256sum /tmp/archivo_demo.bin /tmp/archivo_descargado.bin
 
 ---
 
+### SEGMENTO 4b – NUEVAS FUNCIONALIDADES (2 min)
+> 📺 **Pantalla:** Terminal del cliente en el NameNode
+
+**[Permanecer en la misma terminal del cliente]**
+
+> *"Además de las operaciones básicas, implementé dos funcionalidades adicionales que mejoran la observabilidad y usabilidad del sistema."*
+
+**La primera es el comando `status`:**
+
+```bash
+python3 cli.py status
+```
+
+> *"El comando `status` consulta al NameNode mediante el nuevo RPC `GetClusterStatus` y muestra en tiempo real el estado completo del clúster: qué DataNodes están activos o caídos, cuántos bloques tiene almacenados cada uno, el espacio disponible y el timestamp del último heartbeat recibido. Esto nos permite verificar visualmente que los bloques están efectivamente distribuidos entre los tres nodos."*
+
+**La segunda es `rmdir -r` para eliminación recursiva:**
+
+```bash
+python3 cli.py mkdir /demo_rmdir
+python3 cli.py put /tmp/archivo_video.bin /demo_rmdir/archivo.bin
+python3 cli.py ls /demo_rmdir
+```
+
+```bash
+# Intento sin -r (debe fallar con mensaje útil)
+python3 cli.py rmdir /demo_rmdir
+```
+
+> *"El sistema me protege e incluso me sugiere el comando correcto: `rmdir -r`."*
+
+```bash
+# Eliminación recursiva
+python3 cli.py rmdir -r /demo_rmdir
+python3 cli.py ls /
+```
+
+> *"Con la flag `-r` elimina el directorio y todo su contenido en cascada. En este caso 1 archivo fue eliminado junto con el directorio."*
+
+---
+
 ### SEGMENTO 5 – TOLERANCIA A FALLOS (2 min)
 > 📺 **Pantalla:** Terminal DataNode 2 + Terminal cliente
 
@@ -241,7 +282,8 @@ sha256sum /tmp/archivo_demo.bin /tmp/archivo_tolerancia.bin
 00:00 - 01:00  → Cámara frontal (introducción)
 01:00 - 03:00  → README / diagrama de arquitectura
 03:00 - 06:00  → VS Code (código: proto, heartbeat, blockstore, cli)
-06:00 - 11:00  → Terminales SSH (demo en vivo AWS)
-11:00 - 13:00  → Terminales SSH (tolerancia a fallos)
-13:00 - 14:00  → GitHub + cámara frontal (cierre)
+06:00 - 11:00  → Terminales SSH (demo en vivo AWS: put, get, sha256)
+11:00 - 13:00  → Terminal cliente (status + rmdir -r)
+13:00 - 15:00  → Terminales SSH (tolerancia a fallos)
+15:00 - 16:00  → GitHub + cámara frontal (cierre)
 ```
